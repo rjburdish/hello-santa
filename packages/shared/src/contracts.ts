@@ -11,6 +11,7 @@ export type GatewayClientMsg =
 export type GatewayServerMsg =
   | { type: 'asr.partial'; text: string }
   | { type: 'asr.final'; text: string }
+  | { type: 'santa.response'; text: string }
   | {
       type: 'tts.audio';
       codec: string;

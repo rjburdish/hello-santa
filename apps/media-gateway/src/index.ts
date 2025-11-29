@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import { logger } from './util/logger';

@@ -7,11 +7,19 @@ export class GatewayClient {
   private ws: WebSocket | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private onAudioChunk: ((audio: Uint8Array, tsFirstSample: number) => void) | null = null;
+  private onTranscript: ((speaker: 'child' | 'santa', text: string) => void) | null = null;
+  private onError: ((message: string, code?: string) => void) | null = null;
 
   constructor(private url: string) {}
 
-  connect(onAudioChunk: (audio: Uint8Array, tsFirstSample: number) => void) {
+  connect(
+    onAudioChunk: (audio: Uint8Array, tsFirstSample: number) => void,
+    onTranscript?: (speaker: 'child' | 'santa', text: string) => void,
+    onError?: (message: string, code?: string) => void
+  ) {
     this.onAudioChunk = onAudioChunk;
+    this.onTranscript = onTranscript || null;
+    this.onError = onError || null;
 
     try {
       // Use WS for local dev, WSS for production
@@ -48,7 +56,25 @@ export class GatewayClient {
   }
 
   private handleMessage(message: GatewayServerMsg) {
+    console.log('Received message:', message.type, message);
+
     switch (message.type) {
+      case 'asr.final':
+        // Child's transcript
+        console.log('ASR final:', message.text);
+        if (this.onTranscript) {
+          this.onTranscript('child', message.text);
+        }
+        break;
+
+      case 'santa.response':
+        // Santa's transcript
+        console.log('Santa response:', message.text);
+        if (this.onTranscript) {
+          this.onTranscript('santa', message.text);
+        }
+        break;
+
       case 'viseme':
         // Update viseme store with server-driven visemes
         useVisemeStore.getState().setViseme(message.id as any, message.strength);
@@ -77,6 +103,9 @@ export class GatewayClient {
 
       case 'error':
         console.error('Server error:', message.message, message.code);
+        if (this.onError) {
+          this.onError(message.message, message.code);
+        }
         break;
 
       case 'metrics':
@@ -112,7 +141,7 @@ export class GatewayClient {
     this.sendMessage({
       type: 'audio.chunk',
       ts: timestamp,
-      bytes,
+      bytes: Array.from(bytes), // Convert Uint8Array to regular array for JSON serialization
     });
   }
 

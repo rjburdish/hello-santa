@@ -1,10 +1,13 @@
-// WebSocket handler - V0.2 implementation
-// Child-safety-first: rate limiting, safe logging, no payload storage
+// WebSocket handler - V0.4 implementation
+// Full ASR → LLM → TTS pipeline with child-safety
 import type { WebSocket } from 'ws';
 import type { FastifyRequest } from 'fastify';
-import type { GatewayClientMsg, GatewayServerMsg } from 'shared';
+import type { GatewayClientMsg, GatewayServerMsg, OVRViseme } from 'shared';
 import { logger } from './util/logger';
 import { RateLimiter } from './util/rateLimit';
+import { WhisperASR } from './adapters/asr/whisper';
+import { SantaLLM } from './adapters/llm/santa';
+import { OpenAITTS } from './adapters/tts/openai-tts';
 
 // Rate limiter: 100 messages per 60 seconds per client
 const rateLimiter = new RateLimiter(100, 60000);
@@ -20,10 +23,12 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
     `WebSocket connection established - activeConnections: ${activeConnections}, clientId: ${clientId}`
   );
 
-  // Start fake audio/viseme stream immediately on connection
-  startFakeStream(ws);
+  // Initialize adapters for this connection
+  const asr = new WhisperASR();
+  const llm = new SantaLLM();
+  const tts = new OpenAITTS();
 
-  ws.on('message', (data: Buffer) => {
+  ws.on('message', async (data: Buffer) => {
     // Rate limit check
     if (!rateLimiter.checkLimit(clientId)) {
       logger.warn(`Rate limit exceeded for client: ${clientId}`);
@@ -54,15 +59,87 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
           break;
 
         case 'audio.chunk':
-          // V0.3: validate and count audio chunks
-          // Real ASR processing will be in V0.4
+          // V0.4: Full ASR → LLM → TTS pipeline
+          logger.info(`Audio chunk received - bytes type: ${typeof message.bytes}, length: ${message.bytes?.length || 0}`);
+
           if (message.bytes && message.bytes.length > 0) {
-            // Log frame info (no payload)
-            logger.info(
-              `Audio frame received - size: ${message.bytes.length} bytes, client: ${clientId}`
-            );
-          } else {
-            logger.warn(`Empty audio frame from client: ${clientId}`);
+            try {
+              // Step 1: ASR - Convert audio to text
+              const transcript = await asr.transcribe(new Uint8Array(message.bytes as any));
+
+              if (transcript) {
+                logger.info(`Child said: "${transcript}"`);
+
+                // Send transcript to client (for UI display)
+                const asrMsg: GatewayServerMsg = {
+                  type: 'asr.final',
+                  text: transcript,
+                };
+                ws.send(JSON.stringify(asrMsg));
+
+                // Step 2: LLM - Generate Santa's response
+                const santaResponse = await llm.generateResponse(transcript);
+
+                if (santaResponse) {
+                  logger.info(`Santa says: "${santaResponse}"`);
+
+                  // Send Santa's transcript to client
+                  const santaMsg: GatewayServerMsg = {
+                    type: 'santa.response',
+                    text: santaResponse,
+                  };
+                  ws.send(JSON.stringify(santaMsg));
+
+                  // Step 3: TTS - Convert text to speech with visemes
+                  await tts.synthesize(
+                    santaResponse,
+                    (audioChunk, timestamp) => {
+                      // Send audio to client
+                      const audioMsg: GatewayServerMsg = {
+                        type: 'tts.audio',
+                        codec: 'pcm',
+                        tsFirstSample: timestamp,
+                        bytes: audioChunk as any,
+                      };
+                      ws.send(JSON.stringify(audioMsg));
+                    },
+                    (viseme: OVRViseme, startMs, endMs) => {
+                      // Send viseme to client
+                      const visemeMsg: GatewayServerMsg = {
+                        type: 'viseme',
+                        id: viseme,
+                        startMs,
+                        endMs,
+                        strength: 0.8,
+                      };
+                      ws.send(JSON.stringify(visemeMsg));
+                    }
+                  );
+                }
+              }
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              logger.error(`Pipeline error: ${errorMessage}`);
+
+              // Send detailed error to client
+              let userMessage = 'Failed to process audio';
+              let errorCode = 'PIPELINE_ERROR';
+
+              if (errorMessage.includes('429') || errorMessage.includes('quota')) {
+                userMessage = 'OpenAI API quota exceeded. Please check your billing.';
+                errorCode = 'QUOTA_EXCEEDED';
+              } else if (errorMessage.includes('401') || errorMessage.includes('authentication')) {
+                userMessage = 'API authentication failed. Please check your API key.';
+                errorCode = 'AUTH_ERROR';
+              }
+
+              const errorMsg: GatewayServerMsg = {
+                type: 'error',
+                message: userMessage,
+                code: errorCode,
+              };
+              ws.send(JSON.stringify(errorMsg));
+            }
           }
           break;
 
@@ -90,65 +167,10 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
   ws.on('error', (error) => {
     logger.error(`WebSocket error - client: ${clientId}, error: ${error.message}`);
   });
-}
 
-// Fake audio/viseme stream generator for V0.2 testing
-// Placeholder - will be replaced with real TTS in V0.4
-function startFakeStream(ws: WebSocket) {
-  const visemeSequence = ['aa', 'e', 'ih', 'oh', 'ou', 'sil', 'fv', 'm', 'l', 's', 'sil'];
-  let visemeIndex = 0;
-  let audioTimeMs = 0;
-
-  const interval = setInterval(() => {
-    if (ws.readyState !== ws.OPEN) {
-      clearInterval(interval);
-      return;
-    }
-
-    // Send fake viseme event
-    const viseme = visemeSequence[visemeIndex];
-    const visemeMsg: GatewayServerMsg = {
-      type: 'viseme',
-      id: viseme,
-      startMs: audioTimeMs,
-      endMs: audioTimeMs + 300,
-      strength: 0.8,
-    };
-    ws.send(JSON.stringify(visemeMsg));
-
-    // Send fake audio chunk (simple sine wave as base64)
-    // In reality, this would be actual TTS audio
-    const fakeAudioChunk = generateFakeAudioChunk(200); // 200ms chunk
-    const audioMsg: GatewayServerMsg = {
-      type: 'tts.audio',
-      codec: 'pcm',
-      tsFirstSample: audioTimeMs,
-      bytes: fakeAudioChunk,
-    };
-    ws.send(JSON.stringify(audioMsg));
-
-    visemeIndex = (visemeIndex + 1) % visemeSequence.length;
-    audioTimeMs += 300;
-  }, 300); // Send every 300ms
-
-  // Cleanup on disconnect
-  ws.on('close', () => clearInterval(interval));
-}
-
-// Generate fake audio chunk (simple sine wave)
-// Placeholder for real TTS audio in V0.4
-function generateFakeAudioChunk(durationMs: number): Uint8Array {
-  const sampleRate = 16000; // 16kHz mono
-  const samples = Math.floor((sampleRate * durationMs) / 1000);
-  const buffer = new Uint8Array(samples * 2); // 16-bit PCM
-  const frequency = 200; // Low frequency for "voice-like" sound
-
-  for (let i = 0; i < samples; i++) {
-    const value = Math.sin((2 * Math.PI * frequency * i) / sampleRate) * 0.3;
-    const sample = Math.floor(value * 32767);
-    buffer[i * 2] = sample & 0xff;
-    buffer[i * 2 + 1] = (sample >> 8) & 0xff;
-  }
-
-  return buffer;
+  ws.on('close', () => {
+    // Clean up adapters
+    asr.reset();
+    llm.reset();
+  });
 }

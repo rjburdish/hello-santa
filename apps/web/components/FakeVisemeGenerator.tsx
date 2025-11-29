@@ -4,7 +4,13 @@ import { GatewayClient } from '../lib/ws/gateway';
 import { AudioPlayer } from '../lib/audio/Player';
 import { MicStream } from '../lib/audio/MicStream';
 
-// V0.3 - Server-driven visemes, audio playback, and mic capture
+interface TranscriptEntry {
+  speaker: 'child' | 'santa';
+  text: string;
+  timestamp: number;
+}
+
+// V0.4 - Real ASR → LLM → TTS with transcript display
 export function ServerConnection() {
   const currentViseme = useVisemeStore((state) => state.currentViseme);
   const weight = useVisemeStore((state) => state.weight);
@@ -12,9 +18,15 @@ export function ServerConnection() {
   const [bufferedMs, setBufferedMs] = useState(0);
   const [micActive, setMicActive] = useState(false);
   const [framesSent, setFramesSent] = useState(0);
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<
+    'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
+  >('idle');
   const gatewayRef = useRef<GatewayClient | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
   const micRef = useRef<MicStream | null>(null);
+  const statusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const gateway = new GatewayClient('http://localhost:8787/ws');
@@ -29,10 +41,27 @@ export function ServerConnection() {
     const initAudio = async () => {
       await player.init();
 
-      // Connect to gateway
-      gateway.connect((audioData, timestamp) => {
-        player.addChunk(audioData);
-      });
+      // Connect to gateway with transcript and error callbacks
+      gateway.connect(
+        (audioData, timestamp) => {
+          player.addChunk(audioData);
+          setPipelineStatus('speaking');
+          // Auto-reset to listening after audio finishes
+          if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+          statusTimeoutRef.current = setTimeout(() => setPipelineStatus('listening'), 1000);
+        },
+        (speaker, text) => {
+          setTranscript((prev) => [...prev, { speaker, text, timestamp: Date.now() }]);
+          if (speaker === 'child') {
+            setPipelineStatus('thinking');
+          }
+        },
+        (message, code) => {
+          console.error(`Gateway error [${code}]:`, message);
+          setLastError(`${code ? `[${code}] ` : ''}${message}`);
+          setPipelineStatus('idle');
+        }
+      );
 
       setConnected(true);
 
@@ -75,9 +104,11 @@ export function ServerConnection() {
       });
 
       setMicActive(true);
+      setPipelineStatus('listening');
     } catch (err) {
       console.error('Failed to start microphone:', err);
       alert('Microphone access denied. Please allow microphone permission.');
+      setPipelineStatus('idle');
     }
   };
 
@@ -90,6 +121,11 @@ export function ServerConnection() {
     mic.stop();
     gateway.stop();
     setMicActive(false);
+    setPipelineStatus('idle');
+    if (statusTimeoutRef.current) {
+      clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = null;
+    }
   };
 
   return (
@@ -108,7 +144,7 @@ export function ServerConnection() {
       }}
     >
       <div>
-        <strong>V0.3 - Mic Capture</strong>
+        <strong>V0.4 - Real AI Pipeline</strong>
       </div>
       <div style={{ marginTop: '5px', fontSize: '10px' }}>
         Server: {connected ? '🟢 Connected' : '🔴 Click to connect'}
@@ -165,6 +201,85 @@ export function ServerConnection() {
       </div>
       <div style={{ marginTop: '5px', fontSize: '10px', opacity: 0.5 }}>
         Audio-only (no camera) • No recording
+      </div>
+
+      {/* Pipeline Status Indicator */}
+      {micActive && (
+        <div
+          style={{
+            marginTop: '8px',
+            padding: '6px 8px',
+            background:
+              pipelineStatus === 'listening'
+                ? 'rgba(100,150,255,0.5)'
+                : pipelineStatus === 'thinking'
+                  ? 'rgba(255,200,50,0.5)'
+                  : pipelineStatus === 'speaking'
+                    ? 'rgba(255,100,100,0.5)'
+                    : 'rgba(128,128,128,0.5)',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            textAlign: 'center',
+          }}
+        >
+          {pipelineStatus === 'listening' && '🎤 Listening...'}
+          {pipelineStatus === 'transcribing' && '📝 Transcribing...'}
+          {pipelineStatus === 'thinking' && '🤔 Santa is thinking...'}
+          {pipelineStatus === 'speaking' && '🎅 Santa is speaking...'}
+        </div>
+      )}
+
+      {/* Error Display */}
+      {lastError && (
+        <div
+          style={{
+            marginTop: '10px',
+            padding: '8px',
+            background: 'rgba(255,50,50,0.8)',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 'bold',
+          }}
+        >
+          ⚠️ {lastError}
+        </div>
+      )}
+
+      {/* Transcript Display - Always visible */}
+      <div
+        style={{
+          marginTop: '10px',
+          padding: '8px',
+          background: 'rgba(0,0,0,0.3)',
+          borderRadius: '4px',
+          maxHeight: '200px',
+          minHeight: '80px',
+          overflowY: 'auto',
+          fontSize: '11px',
+        }}
+      >
+        <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Conversation:</div>
+        {transcript.length === 0 ? (
+          <div style={{ opacity: 0.5, fontStyle: 'italic', fontSize: '10px' }}>
+            Start chatting to see the conversation here...
+          </div>
+        ) : (
+          transcript.map((entry, idx) => (
+            <div
+              key={idx}
+              style={{
+                marginTop: idx > 0 ? '5px' : 0,
+                padding: '4px',
+                background:
+                  entry.speaker === 'child' ? 'rgba(100,150,255,0.3)' : 'rgba(255,100,100,0.3)',
+                borderRadius: '3px',
+              }}
+            >
+              <strong>{entry.speaker === 'child' ? '👦 Child' : '🎅 Santa'}:</strong> {entry.text}
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
