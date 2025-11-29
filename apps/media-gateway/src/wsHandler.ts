@@ -15,6 +15,10 @@ const rateLimiter = new RateLimiter(100, 60000);
 // Track active connections for metrics
 let activeConnections = 0;
 
+// Heartbeat configuration
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const IDLE_TIMEOUT = 120000; // 2 minutes
+
 export function handleConnection(ws: WebSocket, req: FastifyRequest) {
   const clientId = req.ip || 'unknown';
   activeConnections++;
@@ -28,7 +32,24 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
   const llm = new SantaLLM();
   const tts = new OpenAITTS();
 
+  // Heartbeat tracking
+  let lastActivity = Date.now();
+  let heartbeatInterval: NodeJS.Timeout | null = null;
+
+  // Start heartbeat check
+  heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    if (now - lastActivity > IDLE_TIMEOUT) {
+      logger.warn(`Closing idle connection - clientId: ${clientId}`);
+      ws.close(1000, 'Idle timeout');
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+    }
+  }, HEARTBEAT_INTERVAL);
+
   ws.on('message', async (data: Buffer) => {
+    // Update last activity timestamp
+    lastActivity = Date.now();
+
     // Rate limit check
     if (!rateLimiter.checkLimit(clientId)) {
       logger.warn(`Rate limit exceeded for client: ${clientId}`);
@@ -56,6 +77,15 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
 
         case 'control.stop':
           logger.info('Client stopped session');
+          break;
+
+        case 'ping':
+          // Respond with pong
+          const pongMsg: GatewayServerMsg = {
+            type: 'pong',
+            ts: message.ts,
+          };
+          ws.send(JSON.stringify(pongMsg));
           break;
 
         case 'audio.chunk':
@@ -157,18 +187,22 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
     }
   });
 
-  ws.on('close', () => {
-    activeConnections--;
-    logger.info(
-      `WebSocket connection closed - activeConnections: ${activeConnections}, clientId: ${clientId}`
-    );
-  });
-
   ws.on('error', (error) => {
     logger.error(`WebSocket error - client: ${clientId}, error: ${error.message}`);
   });
 
   ws.on('close', () => {
+    activeConnections--;
+    logger.info(
+      `WebSocket connection closed - activeConnections: ${activeConnections}, clientId: ${clientId}`
+    );
+
+    // Clean up heartbeat interval
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+
     // Clean up adapters
     asr.reset();
     llm.reset();

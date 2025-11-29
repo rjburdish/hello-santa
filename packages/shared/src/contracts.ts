@@ -5,7 +5,8 @@
 export type GatewayClientMsg =
   | { type: 'control.start' }
   | { type: 'control.stop' }
-  | { type: 'audio.chunk'; ts: number; bytes: Uint8Array };
+  | { type: 'audio.chunk'; ts: number; bytes: Uint8Array }
+  | { type: 'ping'; ts: number };
 
 // Server -> Client messages
 export type GatewayServerMsg =
@@ -26,4 +27,5 @@ export type GatewayServerMsg =
       strength: number;
     }
   | { type: 'error'; message: string; code?: string }
-  | { type: 'metrics'; data: Record<string, number> };
+  | { type: 'metrics'; data: Record<string, number> }
+  | { type: 'pong'; ts: number };

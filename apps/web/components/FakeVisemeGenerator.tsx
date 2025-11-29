@@ -10,7 +10,7 @@ interface TranscriptEntry {
   timestamp: number;
 }
 
-// V0.4 - Real ASR → LLM → TTS with transcript display
+// V0.5 - Real-time optimizations: telemetry, heartbeat, better visemes
 export function ServerConnection() {
   const currentViseme = useVisemeStore((state) => state.currentViseme);
   const weight = useVisemeStore((state) => state.weight);
@@ -23,10 +23,14 @@ export function ServerConnection() {
   const [pipelineStatus, setPipelineStatus] = useState<
     'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
   >('idle');
+  const [fps, setFps] = useState(0);
+  const [rtt, setRtt] = useState(0);
   const gatewayRef = useRef<GatewayClient | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
   const micRef = useRef<MicStream | null>(null);
   const statusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fpsFramesRef = useRef<number[]>([]);
+  const lastPingRef = useRef<number>(0);
 
   useEffect(() => {
     const gateway = new GatewayClient('http://localhost:8787/ws');
@@ -41,7 +45,7 @@ export function ServerConnection() {
     const initAudio = async () => {
       await player.init();
 
-      // Connect to gateway with transcript and error callbacks
+      // Connect to gateway with transcript, error, and RTT callbacks
       gateway.connect(
         (audioData, timestamp) => {
           player.addChunk(audioData);
@@ -60,14 +64,23 @@ export function ServerConnection() {
           console.error(`Gateway error [${code}]:`, message);
           setLastError(`${code ? `[${code}] ` : ''}${message}`);
           setPipelineStatus('idle');
+        },
+        (rttMs) => {
+          setRtt(rttMs);
         }
       );
 
       setConnected(true);
 
-      // Update buffered audio display
+      // Update buffered audio display and FPS
       const interval = setInterval(() => {
         setBufferedMs(player.getBufferedMs());
+
+        // Calculate FPS
+        const now = performance.now();
+        fpsFramesRef.current.push(now);
+        fpsFramesRef.current = fpsFramesRef.current.filter((t) => now - t < 1000);
+        setFps(fpsFramesRef.current.length);
       }, 100);
 
       return () => clearInterval(interval);
@@ -144,7 +157,7 @@ export function ServerConnection() {
       }}
     >
       <div>
-        <strong>V0.4 - Real AI Pipeline</strong>
+        <strong>V0.5 - Performance & Reliability</strong>
       </div>
       <div style={{ marginTop: '5px', fontSize: '10px' }}>
         Server: {connected ? '🟢 Connected' : '🔴 Click to connect'}
@@ -243,6 +256,28 @@ export function ServerConnection() {
           }}
         >
           ⚠️ {lastError}
+        </div>
+      )}
+
+      {/* Telemetry Overlay - V0.5 */}
+      {connected && (
+        <div
+          style={{
+            marginTop: '10px',
+            padding: '8px',
+            background: 'rgba(50,50,50,0.7)',
+            borderRadius: '4px',
+            fontSize: '10px',
+            fontFamily: 'monospace',
+          }}
+        >
+          <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Telemetry:</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+            <div>FPS: {fps}</div>
+            <div>RTT: {rtt}ms</div>
+            <div>Buffer: {Math.round(bufferedMs)}ms</div>
+            <div>Viseme: {currentViseme}</div>
+          </div>
         </div>
       )}
 

@@ -13,6 +13,7 @@ export function SantaHead() {
   // Smooth interpolation for morph target animation (critically damped)
   const targetScale = useRef({ x: 1, y: 1, z: 1 });
   const currentScale = useRef({ x: 1, y: 1, z: 1 });
+  const velocity = useRef({ x: 0, y: 0, z: 0 });
 
   useEffect(() => {
     // Map viseme to simple scale animation (placeholder for actual morph targets)
@@ -35,25 +36,38 @@ export function SantaHead() {
     };
   }, [currentViseme, visemeWeight]);
 
-  // Critically damped spring for smooth animation
+  // Critically damped spring for smooth animation (V0.5 improved)
   useFrame((state, delta) => {
     if (!meshRef.current) return;
 
-    const dampingFactor = 0.15; // Smoothness factor
-    const springStrength = 0.3; // Response speed
+    // Critically damped spring parameters
+    const omega = 15.0; // Angular frequency (controls speed)
+    const zeta = 1.0; // Damping ratio (1.0 = critically damped)
 
-    // Smooth interpolation
-    currentScale.current.x +=
-      (targetScale.current.x - currentScale.current.x) * springStrength;
-    currentScale.current.y +=
-      (targetScale.current.y - currentScale.current.y) * springStrength;
-    currentScale.current.z +=
-      (targetScale.current.z - currentScale.current.z) * springStrength;
+    // Clamp delta to prevent instability
+    const clampedDelta = Math.min(delta, 0.1);
 
-    // Apply damping
-    currentScale.current.x += (1.0 - currentScale.current.x) * dampingFactor * delta;
-    currentScale.current.y += (1.0 - currentScale.current.y) * dampingFactor * delta;
-    currentScale.current.z += (1.0 - currentScale.current.z) * dampingFactor * delta;
+    // Apply critically damped spring to each axis
+    ['x', 'y', 'z'].forEach((axis) => {
+      const target = targetScale.current[axis as keyof typeof targetScale.current];
+      const current = currentScale.current[axis as keyof typeof currentScale.current];
+      const vel = velocity.current[axis as keyof typeof velocity.current];
+
+      // Spring force: F = -k * displacement - damping * velocity
+      const displacement = current - target;
+      const springForce = -omega * omega * displacement;
+      const dampingForce = -2.0 * zeta * omega * vel;
+      const acceleration = springForce + dampingForce;
+
+      // Update velocity and position
+      velocity.current[axis as keyof typeof velocity.current] += acceleration * clampedDelta;
+      currentScale.current[axis as keyof typeof currentScale.current] += velocity.current[axis as keyof typeof velocity.current] * clampedDelta;
+
+      // Clamp mouth openness (y-axis) to prevent unrealistic deformation
+      if (axis === 'y') {
+        currentScale.current.y = Math.max(0.85, Math.min(1.3, currentScale.current.y));
+      }
+    });
 
     meshRef.current.scale.set(
       currentScale.current.x,

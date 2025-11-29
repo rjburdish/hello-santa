@@ -6,20 +6,25 @@ import { useVisemeStore } from '../../state/visemeStore';
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
+  private pingInterval: NodeJS.Timeout | null = null;
   private onAudioChunk: ((audio: Uint8Array, tsFirstSample: number) => void) | null = null;
   private onTranscript: ((speaker: 'child' | 'santa', text: string) => void) | null = null;
   private onError: ((message: string, code?: string) => void) | null = null;
+  private onRttUpdate: ((rtt: number) => void) | null = null;
+  private lastPingTs: number = 0;
 
   constructor(private url: string) {}
 
   connect(
     onAudioChunk: (audio: Uint8Array, tsFirstSample: number) => void,
     onTranscript?: (speaker: 'child' | 'santa', text: string) => void,
-    onError?: (message: string, code?: string) => void
+    onError?: (message: string, code?: string) => void,
+    onRttUpdate?: (rtt: number) => void
   ) {
     this.onAudioChunk = onAudioChunk;
     this.onTranscript = onTranscript || null;
     this.onError = onError || null;
+    this.onRttUpdate = onRttUpdate || null;
 
     try {
       // Use WS for local dev, WSS for production
@@ -30,6 +35,13 @@ export class GatewayClient {
         console.log('Gateway connected');
         // Send start control message
         this.sendMessage({ type: 'control.start' });
+
+        // Start ping interval (every 20 seconds)
+        this.pingInterval = setInterval(() => {
+          const ts = Date.now();
+          this.lastPingTs = ts;
+          this.sendMessage({ type: 'ping', ts });
+        }, 20000);
       };
 
       this.ws.onmessage = (event) => {
@@ -47,6 +59,13 @@ export class GatewayClient {
 
       this.ws.onclose = () => {
         console.log('Gateway disconnected');
+
+        // Clean up ping interval immediately
+        if (this.pingInterval) {
+          clearInterval(this.pingInterval);
+          this.pingInterval = null;
+        }
+
         this.scheduleReconnect();
       };
     } catch (err) {
@@ -112,6 +131,14 @@ export class GatewayClient {
         console.log('Server metrics:', message.data);
         break;
 
+      case 'pong':
+        // Calculate RTT
+        const rtt = Date.now() - message.ts;
+        if (this.onRttUpdate) {
+          this.onRttUpdate(rtt);
+        }
+        break;
+
       default:
         console.warn('Unknown server message type:', (message as any).type);
     }
@@ -124,16 +151,34 @@ export class GatewayClient {
   }
 
   private scheduleReconnect() {
+    // Only reconnect if callbacks are still registered (prevents zombie state)
+    if (!this.onAudioChunk) {
+      console.log('No callbacks registered, skipping reconnect');
+      return;
+    }
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
+    }
+
+    // Clean up old WebSocket before reconnecting
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onerror = null;
+      this.ws.onclose = null;
+      this.ws = null;
     }
 
     // Reconnect after 3 seconds
     this.reconnectTimeout = setTimeout(() => {
       console.log('Attempting to reconnect...');
-      if (this.onAudioChunk) {
-        this.connect(this.onAudioChunk);
-      }
+      this.connect(
+        this.onAudioChunk!,
+        this.onTranscript || undefined,
+        this.onError || undefined,
+        this.onRttUpdate || undefined
+      );
     }, 3000);
   }
 
@@ -150,12 +195,28 @@ export class GatewayClient {
   }
 
   disconnect() {
+    // Clear all callbacks to prevent zombie reconnects
+    this.onAudioChunk = null;
+    this.onTranscript = null;
+    this.onError = null;
+    this.onRttUpdate = null;
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
 
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+
     if (this.ws) {
+      // Clean up event handlers before closing
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onerror = null;
+      this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }
