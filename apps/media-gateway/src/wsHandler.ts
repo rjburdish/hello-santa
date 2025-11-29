@@ -54,8 +54,16 @@ export function handleConnection(ws: WebSocket, req: FastifyRequest) {
           break;
 
         case 'audio.chunk':
-          // V0.2: discard audio chunks, just log count
-          // Real processing will be in V0.4
+          // V0.3: validate and count audio chunks
+          // Real ASR processing will be in V0.4
+          if (message.bytes && message.bytes.length > 0) {
+            // Log frame info (no payload)
+            logger.info(
+              `Audio frame received - size: ${message.bytes.length} bytes, client: ${clientId}`
+            );
+          } else {
+            logger.warn(`Empty audio frame from client: ${clientId}`);
+          }
           break;
 
         default:
