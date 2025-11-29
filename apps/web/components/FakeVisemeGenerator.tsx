@@ -1,44 +1,57 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useVisemeStore } from '../state/visemeStore';
-import type { OVRViseme } from 'shared';
+import { GatewayClient } from '../lib/ws/gateway';
+import { AudioPlayer } from '../lib/audio/Player';
 
-// Fake viseme generator for testing animation pipeline
-// Cycles through visemes to validate morph target blending
-export function FakeVisemeGenerator() {
-  const setViseme = useVisemeStore((state) => state.setViseme);
-  const intervalRef = useRef<NodeJS.Timeout>();
+// V0.2 - Server-driven visemes and audio playback
+export function ServerConnection() {
+  const currentViseme = useVisemeStore((state) => state.currentViseme);
+  const weight = useVisemeStore((state) => state.weight);
+  const [connected, setConnected] = useState(false);
+  const [bufferedMs, setBufferedMs] = useState(0);
+  const gatewayRef = useRef<GatewayClient | null>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
 
   useEffect(() => {
-    // Sequence of visemes to test all mouth shapes
-    const visemeSequence: OVRViseme[] = [
-      'aa', // open mouth
-      'e', // wide
-      'ih', // slightly open
-      'oh', // rounded
-      'ou', // pursed
-      'sil', // neutral
-      'fv', // f/v
-      'm', // lips together
-      'l', // tongue up
-      's', // teeth together
-      'sil', // pause
-    ];
+    const gateway = new GatewayClient('http://localhost:8787/ws');
+    const player = new AudioPlayer();
 
-    let currentIndex = 0;
+    gatewayRef.current = gateway;
+    playerRef.current = player;
 
-    intervalRef.current = setInterval(() => {
-      const viseme = visemeSequence[currentIndex];
-      setViseme(viseme, 0.8); // 80% weight for smooth blending
+    // Initialize audio player (requires user gesture)
+    const initAudio = async () => {
+      await player.init();
 
-      currentIndex = (currentIndex + 1) % visemeSequence.length;
-    }, 400); // Change viseme every 400ms
+      // Connect to gateway
+      gateway.connect((audioData, timestamp) => {
+        player.addChunk(audioData);
+      });
+
+      setConnected(true);
+
+      // Update buffered audio display
+      const interval = setInterval(() => {
+        setBufferedMs(player.getBufferedMs());
+      }, 100);
+
+      return () => clearInterval(interval);
+    };
+
+    // Wait for user interaction before starting audio
+    const handleInteraction = () => {
+      initAudio();
+      document.removeEventListener('click', handleInteraction);
+    };
+
+    document.addEventListener('click', handleInteraction);
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      document.removeEventListener('click', handleInteraction);
+      gateway.disconnect();
+      player.stop();
     };
-  }, [setViseme]);
+  }, []);
 
   return (
     <div
@@ -47,7 +60,7 @@ export function FakeVisemeGenerator() {
         top: 10,
         left: 10,
         padding: '10px',
-        background: 'rgba(0,0,0,0.7)',
+        background: connected ? 'rgba(0,128,0,0.7)' : 'rgba(128,0,0,0.7)',
         color: '#fff',
         fontFamily: 'monospace',
         fontSize: '12px',
@@ -56,14 +69,19 @@ export function FakeVisemeGenerator() {
       }}
     >
       <div>
-        <strong>V0.1 - Fake Viseme Test</strong>
+        <strong>V0.2 - Server Connection</strong>
+      </div>
+      <div style={{ marginTop: '5px', fontSize: '10px' }}>
+        Status: {connected ? '🟢 Connected' : '🔴 Click to connect'}
       </div>
       <div style={{ marginTop: '5px', fontSize: '10px', opacity: 0.7 }}>
-        Current: {useVisemeStore.getState().currentViseme} (
-        {Math.round(useVisemeStore.getState().weight * 100)}%)
+        Viseme: {currentViseme} ({Math.round(weight * 100)}%)
+      </div>
+      <div style={{ marginTop: '5px', fontSize: '10px', opacity: 0.7 }}>
+        Audio buffer: {Math.round(bufferedMs)}ms
       </div>
       <div style={{ marginTop: '5px', fontSize: '10px', opacity: 0.5 }}>
-        Placeholder model - will be replaced in V0.1b
+        Placeholder audio - Santa voice in V0.4
       </div>
     </div>
   );
