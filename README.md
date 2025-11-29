@@ -54,8 +54,9 @@ santa/
 
 ## Development Roadmap
 
-**V0.0** ✓ Monorepo scaffolding (current)
-**V0.1** - Render Santa + fake visemes
+**V0.0** ✓ Monorepo scaffolding
+**V0.1** ✓ Render placeholder head + fake visemes (current)
+**V0.1b** - Replace placeholder with production Santa GLB model [REQUIRED FOR PRODUCTION]
 **V0.2** - WebSocket skeleton with echo path
 **V0.3** - Mic capture
 **V0.4** - Real ASR → LLM → TTS pipeline
@@ -64,3 +65,12 @@ santa/
 **V0.7** - Field testing & bugfixes
 
 **V1** - Production (Stripe, enhanced safety, observability, optional recording)
+
+## V0.1 Features
+
+- ✓ 3D placeholder head with R3F (React Three Fiber)
+- ✓ Viseme store with weighted morph targets
+- ✓ Fake viseme generator cycling through all OVR visemes
+- ✓ Critically damped animation (smooth, no snapping)
+- ✓ Performance monitor (targeting 30+ FPS)
+- ✓ Lighting setup optimized for head/shoulders view
