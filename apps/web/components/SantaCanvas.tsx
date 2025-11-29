@@ -5,7 +5,7 @@ import { PerformanceMonitor } from './PerformanceMonitor';
 
 export function SantaCanvas() {
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#1a1a2e' }}>
+    <div style={{ width: '100vw', height: '100vh', background: '#1a1a2e', position: 'relative' }}>
       <Canvas
         camera={{ position: [0, 0, 3], fov: 50 }}
         gl={{ antialias: true }}
@@ -18,9 +18,6 @@ export function SantaCanvas() {
         {/* Placeholder Santa head */}
         <SantaHead />
 
-        {/* Performance monitor */}
-        <PerformanceMonitor />
-
         {/* Dev controls - can remove later */}
         <OrbitControls
           enableZoom={true}
@@ -29,6 +26,9 @@ export function SantaCanvas() {
           maxDistance={5}
         />
       </Canvas>
+
+      {/* Performance monitor - outside Canvas */}
+      <PerformanceMonitor />
     </div>
   );
 }
